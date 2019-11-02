@@ -9,10 +9,10 @@
   * <h2><center>&copy; Copyright (c) 2019 STMicroelectronics.
   * All rights reserved.</center></h2>
   *
-  * This software component is licensed by ST under BSD 3-Clause license,
-  * the "License"; You may not use this file except in compliance with the
-  * License. You may obtain a copy of the License at:
-  *                        opensource.org/licenses/BSD-3-Clause
+  * This software component is licensed by ST under Ultimate Liberty license
+  * SLA0044, the "License"; You may not use this file except in compliance with
+  * the License. You may obtain a copy of the License at:
+  *                             www.st.com/SLA0044
   *
   ******************************************************************************
   */
@@ -21,11 +21,12 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "cmsis_os.h"
+#include "lwip.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "queue.h"
-#include <stdio.h>
+#include "lwip/api.h"
+#include "AuvRCON.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -45,17 +46,13 @@
 
 /* Private variables ---------------------------------------------------------*/
 
-ETH_HandleTypeDef heth;
-
 UART_HandleTypeDef huart3;
 
-PCD_HandleTypeDef hpcd_USB_OTG_FS;
-
+typedef StaticTask_t osStaticThreadDef_t;
 osThreadId_t defaultTaskHandle;
-osThreadId_t uartTxTaskHandle;
-osThreadId_t msgSenderTaskHandle;
-osThreadId_t msgSenderTask2Handle;
-osMessageQueueId_t uartMsgQueueHandle;
+osThreadId_t tcpecho_taskHandle;
+uint32_t tcpecho_taskBuffer[ 3024 ];
+osStaticThreadDef_t tcpecho_taskControlBlock;
 /* USER CODE BEGIN PV */
 
 /* USER CODE END PV */
@@ -63,13 +60,9 @@ osMessageQueueId_t uartMsgQueueHandle;
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
-static void MX_ETH_Init(void);
 static void MX_USART3_UART_Init(void);
-static void MX_USB_OTG_FS_PCD_Init(void);
 void StartDefaultTask(void *argument);
-void UartTxTask(void *argument);
-void MsgSenderTask(void *argument);
-void MsgSenderTask2(void *argument);
+void tcpecho_thread(void *argument);
 
 /* USER CODE BEGIN PFP */
 
@@ -77,6 +70,7 @@ void MsgSenderTask2(void *argument);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+\
 
 /* USER CODE END 0 */
 
@@ -109,9 +103,7 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_ETH_Init();
   MX_USART3_UART_Init();
-  MX_USB_OTG_FS_PCD_Init();
   /* USER CODE BEGIN 2 */
 
   /* USER CODE END 2 */
@@ -130,13 +122,6 @@ int main(void)
   /* start timers, add new ones, ... */
   /* USER CODE END RTOS_TIMERS */
 
-  /* Create the queue(s) */
-  /* definition and creation of uartMsgQueue */
-  const osMessageQueueAttr_t uartMsgQueue_attributes = {
-    .name = "uartMsgQueue"
-  };
-  uartMsgQueueHandle = osMessageQueueNew (16, 130, &uartMsgQueue_attributes);
-
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
   /* USER CODE END RTOS_QUEUES */
@@ -146,33 +131,20 @@ int main(void)
   const osThreadAttr_t defaultTask_attributes = {
     .name = "defaultTask",
     .priority = (osPriority_t) osPriorityNormal,
-    .stack_size = 128
+    .stack_size = 1024
   };
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
-  /* definition and creation of uartTxTask */
-  const osThreadAttr_t uartTxTask_attributes = {
-    .name = "uartTxTask",
-    .priority = (osPriority_t) osPriorityLow,
-    .stack_size = 512
+  /* definition and creation of tcpecho_task */
+  const osThreadAttr_t tcpecho_task_attributes = {
+    .name = "tcpecho_task",
+    .stack_mem = &tcpecho_taskBuffer[0],
+    .stack_size = sizeof(tcpecho_taskBuffer),
+    .cb_mem = &tcpecho_taskControlBlock,
+    .cb_size = sizeof(tcpecho_taskControlBlock),
+    .priority = (osPriority_t) osPriorityNormal,
   };
-  uartTxTaskHandle = osThreadNew(UartTxTask, NULL, &uartTxTask_attributes);
-
-  /* definition and creation of msgSenderTask */
-  const osThreadAttr_t msgSenderTask_attributes = {
-    .name = "msgSenderTask",
-    .priority = (osPriority_t) osPriorityLow,
-    .stack_size = 2048
-  };
-  msgSenderTaskHandle = osThreadNew(MsgSenderTask, NULL, &msgSenderTask_attributes);
-
-  /* definition and creation of msgSenderTask2 */
-  const osThreadAttr_t msgSenderTask2_attributes = {
-    .name = "msgSenderTask2",
-    .priority = (osPriority_t) osPriorityLow,
-    .stack_size = 2048
-  };
-  msgSenderTask2Handle = osThreadNew(MsgSenderTask2, NULL, &msgSenderTask2_attributes);
+  tcpecho_taskHandle = osThreadNew(tcpecho_thread, NULL, &tcpecho_task_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -220,7 +192,7 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.PLL.PLLM = 4;
   RCC_OscInitStruct.PLL.PLLN = 216;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
-  RCC_OscInitStruct.PLL.PLLQ = 9;
+  RCC_OscInitStruct.PLL.PLLQ = 2;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
     Error_Handler();
@@ -244,58 +216,12 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
-  PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_USART3|RCC_PERIPHCLK_CLK48;
+  PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_USART3;
   PeriphClkInitStruct.Usart3ClockSelection = RCC_USART3CLKSOURCE_PCLK1;
-  PeriphClkInitStruct.Clk48ClockSelection = RCC_CLK48SOURCE_PLL;
   if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
   {
     Error_Handler();
   }
-}
-
-/**
-  * @brief ETH Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_ETH_Init(void)
-{
-
-  /* USER CODE BEGIN ETH_Init 0 */
-
-  /* USER CODE END ETH_Init 0 */
-
-   uint8_t MACAddr[6] ;
-
-  /* USER CODE BEGIN ETH_Init 1 */
-
-  /* USER CODE END ETH_Init 1 */
-  heth.Instance = ETH;
-  heth.Init.AutoNegotiation = ETH_AUTONEGOTIATION_ENABLE;
-  heth.Init.PhyAddress = LAN8742A_PHY_ADDRESS;
-  MACAddr[0] = 0x00;
-  MACAddr[1] = 0x80;
-  MACAddr[2] = 0xE1;
-  MACAddr[3] = 0x00;
-  MACAddr[4] = 0x00;
-  MACAddr[5] = 0x00;
-  heth.Init.MACAddr = &MACAddr[0];
-  heth.Init.RxMode = ETH_RXPOLLING_MODE;
-  heth.Init.ChecksumMode = ETH_CHECKSUM_BY_HARDWARE;
-  heth.Init.MediaInterface = ETH_MEDIA_INTERFACE_RMII;
-
-  /* USER CODE BEGIN MACADDRESS */
-    
-  /* USER CODE END MACADDRESS */
-
-  if (HAL_ETH_Init(&heth) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN ETH_Init 2 */
-
-  /* USER CODE END ETH_Init 2 */
-
 }
 
 /**
@@ -330,41 +256,6 @@ static void MX_USART3_UART_Init(void)
   /* USER CODE BEGIN USART3_Init 2 */
 
   /* USER CODE END USART3_Init 2 */
-
-}
-
-/**
-  * @brief USB_OTG_FS Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_USB_OTG_FS_PCD_Init(void)
-{
-
-  /* USER CODE BEGIN USB_OTG_FS_Init 0 */
-
-  /* USER CODE END USB_OTG_FS_Init 0 */
-
-  /* USER CODE BEGIN USB_OTG_FS_Init 1 */
-
-  /* USER CODE END USB_OTG_FS_Init 1 */
-  hpcd_USB_OTG_FS.Instance = USB_OTG_FS;
-  hpcd_USB_OTG_FS.Init.dev_endpoints = 6;
-  hpcd_USB_OTG_FS.Init.speed = PCD_SPEED_FULL;
-  hpcd_USB_OTG_FS.Init.dma_enable = DISABLE;
-  hpcd_USB_OTG_FS.Init.phy_itface = PCD_PHY_EMBEDDED;
-  hpcd_USB_OTG_FS.Init.Sof_enable = ENABLE;
-  hpcd_USB_OTG_FS.Init.low_power_enable = DISABLE;
-  hpcd_USB_OTG_FS.Init.lpm_enable = DISABLE;
-  hpcd_USB_OTG_FS.Init.vbus_sensing_enable = ENABLE;
-  hpcd_USB_OTG_FS.Init.use_dedicated_ep1 = DISABLE;
-  if (HAL_PCD_Init(&hpcd_USB_OTG_FS) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN USB_OTG_FS_Init 2 */
-
-  /* USER CODE END USB_OTG_FS_Init 2 */
 
 }
 
@@ -417,6 +308,20 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(USB_OverCurrent_GPIO_Port, &GPIO_InitStruct);
 
+  /*Configure GPIO pins : USB_SOF_Pin USB_ID_Pin USB_DM_Pin USB_DP_Pin */
+  GPIO_InitStruct.Pin = USB_SOF_Pin|USB_ID_Pin|USB_DM_Pin|USB_DP_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+  GPIO_InitStruct.Alternate = GPIO_AF10_OTG_FS;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : USB_VBUS_Pin */
+  GPIO_InitStruct.Pin = USB_VBUS_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(USB_VBUS_GPIO_Port, &GPIO_InitStruct);
+
 }
 
 /* USER CODE BEGIN 4 */
@@ -426,7 +331,7 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN Header_StartDefaultTask */
 /**
   * @brief  Function implementing the defaultTask thread.
-  * @param  argument: Not used 
+  * @param  argument: Not used
   * @retval None
   */
 /* USER CODE END Header_StartDefaultTask */
@@ -434,105 +339,98 @@ void StartDefaultTask(void *argument)
 {
     
     
-    
-    
-    
-    
+                 
+  /* init code for LWIP */
+  MX_LWIP_Init();
 
   /* USER CODE BEGIN 5 */
+
   /* Infinite loop */
   for(;;)
   {
-    osDelay(1);
+
+    osDelay(10);
   }
   /* USER CODE END 5 */ 
 }
 
-/* USER CODE BEGIN Header_UartTxTask */
+/* USER CODE BEGIN Header_tcpecho_thread */
 /**
-* @brief Function implementing the uartTxTask thread.
+* @brief Function implementing the tcpecho_task thread.
 * @param argument: Not used
 * @retval None
 */
-/* USER CODE END Header_UartTxTask */
-void UartTxTask(void *argument)
+/* USER CODE END Header_tcpecho_thread */
+void tcpecho_thread(void *argument)
 {
-  /* USER CODE BEGIN UartTxTask */
-	BaseType_t xStatus;
-	uint8_t msg_buff[130];
-	uint16_t *len = &msg_buff[0];;
-	uint8_t *str = &msg_buff[2];
+  /* USER CODE BEGIN tcpecho_thread */
+	struct netconn *conn = 0, *newconn;
+	ip_addr_t addr;
+	u16_t port;
+	err_t err, accept_err;
+
+	struct netbuf *buf;
+	uint8_t *data_rx;
+	u16_t len;
+
+	rcon_packet packet;
+	rcon_packet_reset(&packet);
+	int yes = 0;
+
+	osDelay(5000);
+	if((conn = netconn_new(NETCONN_TCP)))
+	{
+		if((err = netconn_bind(conn, NULL, 5005)) == ERR_OK)
+		{
+			netconn_listen(conn);
+
+			while(1)
+			{
+				accept_err = netconn_accept(conn, &newconn);
+
+				if(accept_err == ERR_OK)
+				{
+					while((err = netconn_recv(newconn, &buf)) == ERR_OK)
+					{
+						do
+						{
+							netbuf_data(buf, &data_rx, &len);
+
+							while(len--)
+							{
+								if(rcon_parse_byte(&packet, *data_rx++) == RCON_PACKET_COMPLETE){
+									yes ++;
+								}
+							}
+
+						}while(netbuf_next(buf) >= 0);
+
+						netbuf_delete(buf);
+					}
+					netconn_close(newconn);
+					netconn_delete(newconn);
+				}
+			}
+		}
+		else
+		{
+			netconn_delete(newconn);
+		}
+
+
+	}
+
+
+
+
   /* Infinite loop */
   for(;;)
   {
-	  if(uxQueueMessagesWaiting(uartMsgQueueHandle) != 0)
-	  {
-		  xStatus = xQueueReceive(uartMsgQueueHandle, msg_buff, 1);
-		  if(xStatus == pdPASS)
-		  {
-			 HAL_UART_Transmit_IT(&huart3, str, *len);
-		  }else
-		  {
-
-		  }
-	  }
 
 
-    osDelay(1);
-
-  }
-  /* USER CODE END UartTxTask */
-}
-
-/* USER CODE BEGIN Header_MsgSenderTask */
-/**
-* @brief Function implementing the msgSenderTask thread.
-* @param argument: Not used
-* @retval None
-*/
-/* USER CODE END Header_MsgSenderTask */
-void MsgSenderTask(void *argument)
-{
-  /* USER CODE BEGIN MsgSenderTask */
-	uint8_t msg[130];
-	uint16_t *len = (uint16_t*)&msg[0];
-	uint8_t *msg_str = &msg[2];
-	uint32_t i = 0;
-	UBaseType_t uxHighWaterMark;
-  /* Infinite loop */
-  for(;;)
-  {
-	  *len = (uint16_t)snprintf((char*)msg_str, 128, "Sender1: msg number %d\r\n", (int)i++);
-
-	  xQueueSend(uartMsgQueueHandle, msg,1);
-	  uxHighWaterMark = uxTaskGetStackHighWaterMark( NULL );
     osDelay(1000);
   }
-  /* USER CODE END MsgSenderTask */
-}
-
-/* USER CODE BEGIN Header_MsgSenderTask2 */
-/**
-* @brief Function implementing the msgSenderTask2 thread.
-* @param argument: Not used
-* @retval None
-*/
-/* USER CODE END Header_MsgSenderTask2 */
-void MsgSenderTask2(void *argument)
-{
-  /* USER CODE BEGIN MsgSenderTask2 */
-	uint8_t msg[130];
-	uint16_t *len = (uint16_t*)&msg[0];
-	uint8_t *msg_str = &msg[2];
-	uint32_t i = 0;
-  /* Infinite loop */
-  for(;;)
-  {	  *len = (uint16_t)snprintf((char*)msg_str, 128, "Sender2: msg number %d\r\n", (int)i++);
-
-  	  xQueueSend(uartMsgQueueHandle, msg,1);
-    osDelay(999);
-  }
-  /* USER CODE END MsgSenderTask2 */
+  /* USER CODE END tcpecho_thread */
 }
 
 /**
