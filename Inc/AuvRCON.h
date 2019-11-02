@@ -50,7 +50,7 @@ typedef struct
 
 void rcon_packet_reset(rcon_packet* packet);
 
-rcon_state rcon_parse_data(rcon_packet* packet, uint8_t data);
+rcon_state rcon_parse_byte(rcon_packet* packet, uint8_t data);
 
 
 #endif /* AUVRCON_H_ */

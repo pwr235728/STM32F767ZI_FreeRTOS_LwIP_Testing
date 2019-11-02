@@ -50,9 +50,16 @@ UART_HandleTypeDef huart3;
 
 typedef StaticTask_t osStaticThreadDef_t;
 osThreadId_t defaultTaskHandle;
-osThreadId_t tcpecho_taskHandle;
-uint32_t tcpecho_taskBuffer[ 3024 ];
-osStaticThreadDef_t tcpecho_taskControlBlock;
+
+osThreadId_t rconServerTaskHandle;
+uint32_t rconServerTaskBuffer[ 1024 ];
+osStaticThreadDef_t rconServerTaskControlBlock;
+
+osThreadId_t rconServerExecHandle;
+uint32_t rconServerExecBuffer[ 1024 ];
+osStaticThreadDef_t rconServerExecControlBlock;
+
+osMessageQueueId_t rconCmdQueueHandle;
 /* USER CODE BEGIN PV */
 
 /* USER CODE END PV */
@@ -62,7 +69,8 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART3_UART_Init(void);
 void StartDefaultTask(void *argument);
-void tcpecho_thread(void *argument);
+extern void RconServerTask(void *argument);
+extern void RconServerExec(void *argument);
 
 /* USER CODE BEGIN PFP */
 
@@ -122,6 +130,13 @@ int main(void)
   /* start timers, add new ones, ... */
   /* USER CODE END RTOS_TIMERS */
 
+  /* Create the queue(s) */
+  /* definition and creation of rconCmdQueue */
+  const osMessageQueueAttr_t rconCmdQueue_attributes = {
+    .name = "rconCmdQueue"
+  };
+  rconCmdQueueHandle = osMessageQueueNew (4, sizeof(rcon_packet), &rconCmdQueue_attributes);
+
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
   /* USER CODE END RTOS_QUEUES */
@@ -135,16 +150,27 @@ int main(void)
   };
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
-  /* definition and creation of tcpecho_task */
-  const osThreadAttr_t tcpecho_task_attributes = {
-    .name = "tcpecho_task",
-    .stack_mem = &tcpecho_taskBuffer[0],
-    .stack_size = sizeof(tcpecho_taskBuffer),
-    .cb_mem = &tcpecho_taskControlBlock,
-    .cb_size = sizeof(tcpecho_taskControlBlock),
-    .priority = (osPriority_t) osPriorityNormal,
+  /* definition and creation of rconServerTask */
+  const osThreadAttr_t rconServerTask_attributes = {
+    .name = "rconServerTask",
+    .stack_mem = &rconServerTaskBuffer[0],
+    .stack_size = sizeof(rconServerTaskBuffer),
+    .cb_mem = &rconServerTaskControlBlock,
+    .cb_size = sizeof(rconServerTaskControlBlock),
+    .priority = (osPriority_t) osPriorityLow,
   };
-  tcpecho_taskHandle = osThreadNew(tcpecho_thread, NULL, &tcpecho_task_attributes);
+  rconServerTaskHandle = osThreadNew(RconServerTask, NULL, &rconServerTask_attributes);
+
+  /* definition and creation of rconServerExec */
+  const osThreadAttr_t rconServerExec_attributes = {
+    .name = "rconServerExec",
+    .stack_mem = &rconServerExecBuffer[0],
+    .stack_size = sizeof(rconServerExecBuffer),
+    .cb_mem = &rconServerExecControlBlock,
+    .cb_size = sizeof(rconServerExecControlBlock),
+    .priority = (osPriority_t) osPriorityLow,
+  };
+  rconServerExecHandle = osThreadNew(RconServerExec, NULL, &rconServerExec_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -352,85 +378,6 @@ void StartDefaultTask(void *argument)
     osDelay(10);
   }
   /* USER CODE END 5 */ 
-}
-
-/* USER CODE BEGIN Header_tcpecho_thread */
-/**
-* @brief Function implementing the tcpecho_task thread.
-* @param argument: Not used
-* @retval None
-*/
-/* USER CODE END Header_tcpecho_thread */
-void tcpecho_thread(void *argument)
-{
-  /* USER CODE BEGIN tcpecho_thread */
-	struct netconn *conn = 0, *newconn;
-	ip_addr_t addr;
-	u16_t port;
-	err_t err, accept_err;
-
-	struct netbuf *buf;
-	uint8_t *data_rx;
-	u16_t len;
-
-	rcon_packet packet;
-	rcon_packet_reset(&packet);
-	int yes = 0;
-
-	osDelay(5000);
-	if((conn = netconn_new(NETCONN_TCP)))
-	{
-		if((err = netconn_bind(conn, NULL, 5005)) == ERR_OK)
-		{
-			netconn_listen(conn);
-
-			while(1)
-			{
-				accept_err = netconn_accept(conn, &newconn);
-
-				if(accept_err == ERR_OK)
-				{
-					while((err = netconn_recv(newconn, &buf)) == ERR_OK)
-					{
-						do
-						{
-							netbuf_data(buf, &data_rx, &len);
-
-							while(len--)
-							{
-								if(rcon_parse_byte(&packet, *data_rx++) == RCON_PACKET_COMPLETE){
-									yes ++;
-								}
-							}
-
-						}while(netbuf_next(buf) >= 0);
-
-						netbuf_delete(buf);
-					}
-					netconn_close(newconn);
-					netconn_delete(newconn);
-				}
-			}
-		}
-		else
-		{
-			netconn_delete(newconn);
-		}
-
-
-	}
-
-
-
-
-  /* Infinite loop */
-  for(;;)
-  {
-
-
-    osDelay(1000);
-  }
-  /* USER CODE END tcpecho_thread */
 }
 
 /**
