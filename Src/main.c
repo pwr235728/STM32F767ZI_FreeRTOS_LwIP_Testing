@@ -50,18 +50,13 @@ UART_HandleTypeDef huart3;
 
 typedef StaticTask_t osStaticThreadDef_t;
 osThreadId_t defaultTaskHandle;
-
 osThreadId_t rconServerTaskHandle;
 uint32_t rconServerTaskBuffer[ 1024 ];
 osStaticThreadDef_t rconServerTaskControlBlock;
-
-osThreadId_t rconServerExecHandle;
+osThreadId_t rconExecTaskHandle;
 uint32_t rconServerExecBuffer[ 1024 ];
 osStaticThreadDef_t rconServerExecControlBlock;
-
-osMessageQueueId_t rconCmdQueueHandle;
 /* USER CODE BEGIN PV */
-
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -70,7 +65,7 @@ static void MX_GPIO_Init(void);
 static void MX_USART3_UART_Init(void);
 void StartDefaultTask(void *argument);
 extern void RconServerTask(void *argument);
-extern void RconServerExec(void *argument);
+extern void RconExecTask(void *argument);
 
 /* USER CODE BEGIN PFP */
 
@@ -130,13 +125,6 @@ int main(void)
   /* start timers, add new ones, ... */
   /* USER CODE END RTOS_TIMERS */
 
-  /* Create the queue(s) */
-  /* definition and creation of rconCmdQueue */
-  const osMessageQueueAttr_t rconCmdQueue_attributes = {
-    .name = "rconCmdQueue"
-  };
-  rconCmdQueueHandle = osMessageQueueNew (4, sizeof(rcon_packet), &rconCmdQueue_attributes);
-
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
   /* USER CODE END RTOS_QUEUES */
@@ -161,16 +149,16 @@ int main(void)
   };
   rconServerTaskHandle = osThreadNew(RconServerTask, NULL, &rconServerTask_attributes);
 
-  /* definition and creation of rconServerExec */
-  const osThreadAttr_t rconServerExec_attributes = {
-    .name = "rconServerExec",
+  /* definition and creation of rconExecTask */
+  const osThreadAttr_t rconExecTask_attributes = {
+    .name = "rconExecTask",
     .stack_mem = &rconServerExecBuffer[0],
     .stack_size = sizeof(rconServerExecBuffer),
     .cb_mem = &rconServerExecControlBlock,
     .cb_size = sizeof(rconServerExecControlBlock),
     .priority = (osPriority_t) osPriorityLow,
   };
-  rconServerExecHandle = osThreadNew(RconServerExec, NULL, &rconServerExec_attributes);
+  rconExecTaskHandle = osThreadNew(RconExecTask, NULL, &rconExecTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
