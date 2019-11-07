@@ -129,19 +129,22 @@ void RconServerTask(void *argument) {
 
 void RconExecTask(void *argument) {
 	rcon_packet *rcon_packet;
+	cb_init(&cb, packets, RCON_MEMPOOL_OBJECTS);
+	evt_id = osEventFlagsNew(NULL);
 
 	while (1)
 	{
 		osEventFlagsWait(evt_id, 0x01, osFlagsWaitAny, osWaitForever);
-		rcon_packet = cb_peek(&cb);
 
-		if(!rcon_packet)
+
+		while((rcon_packet = cb_peek(&cb)))
 		{
-			if (rcon_packet->type == '1')
+			if (rcon_packet->type == 1)
 				HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
-			if (rcon_packet->type == '2')
+			if (rcon_packet->type == 2)
 				HAL_GPIO_TogglePin(LD3_GPIO_Port, LD3_Pin);
 			cb_free(&cb);
 		}
+		osEventFlagsClear(evt_id, 0x01);
 	}
 }

@@ -145,7 +145,7 @@ int main(void)
     .stack_size = sizeof(rconServerTaskBuffer),
     .cb_mem = &rconServerTaskControlBlock,
     .cb_size = sizeof(rconServerTaskControlBlock),
-    .priority = (osPriority_t) osPriorityLow,
+    .priority = (osPriority_t) osPriorityHigh,
   };
   rconServerTaskHandle = osThreadNew(RconServerTask, NULL, &rconServerTask_attributes);
 
@@ -156,7 +156,7 @@ int main(void)
     .stack_size = sizeof(rconServerExecBuffer),
     .cb_mem = &rconServerExecControlBlock,
     .cb_size = sizeof(rconServerExecControlBlock),
-    .priority = (osPriority_t) osPriorityLow,
+    .priority = (osPriority_t) osPriorityRealtime,
   };
   rconExecTaskHandle = osThreadNew(RconExecTask, NULL, &rconExecTask_attributes);
 
@@ -351,12 +351,8 @@ static void MX_GPIO_Init(void)
 /* USER CODE END Header_StartDefaultTask */
 void StartDefaultTask(void *argument)
 {
-    
-    
-                 
   /* init code for LWIP */
   MX_LWIP_Init();
-
   /* USER CODE BEGIN 5 */
 
   /* Infinite loop */
